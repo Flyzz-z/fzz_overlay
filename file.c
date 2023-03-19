@@ -239,7 +239,7 @@ static ssize_t block_read_iter(struct dentry *dentry,struct kiocb *iocb,struct i
 	end_block = ovl_get_block(iocb->ki_pos+iter->count);
 	oi = OVL_I(dentry->d_inode);
 	count = iter->count;
-
+	printk("fzz_overlay block_read_iter pos=%lld pos+count=%lld\n",iocb->ki_pos,iocb->ki_pos+iter->count);
 	printk("fzz_overlay block_read_iter start_block=%ld end_block=%ld count=%ld\n",start_block,end_block,count);
 	ovl_path_upper(dentry,&upper_path);
 	if(IS_ERR(&upper_path))

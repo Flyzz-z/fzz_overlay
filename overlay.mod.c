@@ -28,4 +28,4 @@ __attribute__((section(".modinfo"))) =
 "depends=";
 
 
-MODULE_INFO(srcversion, "04825ED08BD36BBF0880DC2");
+MODULE_INFO(srcversion, "AE86AFB0880666336D6E656");
