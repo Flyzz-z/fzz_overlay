@@ -449,7 +449,15 @@ static ssize_t block_write_iter(struct dentry *dentry,struct kiocb *iocb,struct 
 	{
 		if(i>oi->block_count)
 			break;
-		oi->block_status[i] = 1;
+		if(!oi->block_status[i])
+		{
+			oi->block_status[i] = true;
+			oi->copy_count++;
+		}
+	}
+	if(oi->copy_count==oi->block_count)
+	{
+		oi->cow_status = false;
 	}
 	return ret;
 }
