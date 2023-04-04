@@ -119,6 +119,7 @@ struct ovl_inode {
 	bool cow_status;
 	struct file *lower_file;
 	struct file *upper_file;
+	struct file *meta_file;
 	char block_status[MAX_BLOCK_NUM];
 	//fzz_overlay: end
 };

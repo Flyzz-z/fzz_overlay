@@ -191,7 +191,9 @@ static struct inode *ovl_alloc_inode(struct super_block *sb)
 	oi->cow_status = false;
 	oi->lower_file = NULL;
 	oi->upper_file = NULL;
-	for(i=0;i<MAX_BLOCK_NUM;i++) {
+	oi->meta_file = NULL;
+	for(i=0;i<MAX_BLOCK_NUM;i++)
+	{
 		oi->block_status[i] = 0;
 	}
 	//fzz_overlay: end
