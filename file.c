@@ -441,7 +441,17 @@ static ssize_t block_write_iter(struct dentry *dentry,struct kiocb *iocb,struct 
 			}
 		}
 	}
-	vfs_fsync(oi->upper_file, 0);
+
+	if(!oi->upper_file)
+	{	
+		oi->upper_file = ovl_path_open(&upper_path, O_RDWR);
+		if (IS_ERR(oi->upper_file))
+		{
+			printk("fzz_overlay block_write_iter: open upper file error\n");
+			return PTR_ERR(oi->upper_file);
+		}
+	}
+	// vfs_fsync(oi->upper_file, 0);
 	ret = vfs_iter_write(oi->upper_file, iter, &iocb->ki_pos,
 		ovl_iocb_to_rwf(iocb));
 	//TODO: how to handle ret<len?
@@ -492,6 +502,7 @@ static ssize_t ovl_write_iter(struct kiocb *iocb, struct iov_iter *iter)
 	//fzz_overlay: start
 	if(OVL_I(inode)->cow_status)
 	{
+		//printk("write_block start\n");
 		ret = block_write_iter(file_dentry(file),iocb,iter);
 	}
 	else
