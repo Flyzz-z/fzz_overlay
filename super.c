@@ -192,10 +192,10 @@ static struct inode *ovl_alloc_inode(struct super_block *sb)
 	oi->lower_file = NULL;
 	oi->upper_file = NULL;
 	oi->meta_file = NULL;
-	for(i=0;i<MAX_BLOCK_NUM;i++)
-	{
-		oi->block_status[i] = 0;
-	}
+	// for(i=0;i<MAX_BLOCK_NUM;i++)
+	// {
+	// 	oi->block_status[i] = 0;
+	// }
 	//fzz_overlay: end
 	return &oi->vfs_inode;
 }
@@ -213,6 +213,8 @@ static void ovl_free_inode(struct inode *inode)
 	if(oi->upper_file != NULL) {
 		filp_close(oi->upper_file, NULL);
 	}
+	if(oi->block_status)
+		kfree(oi->block_status);
 	//fzz_overlay: end
 	kmem_cache_free(ovl_inode_cachep, oi);
 }

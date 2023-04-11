@@ -120,7 +120,7 @@ struct ovl_inode {
 	struct file *lower_file;
 	struct file *upper_file;
 	struct file *meta_file;
-	char block_status[MAX_BLOCK_NUM];
+	char *block_status;
 	//fzz_overlay: end
 };
 

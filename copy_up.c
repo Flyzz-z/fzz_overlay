@@ -445,30 +445,39 @@ static int ovl_copy_up_inode(struct ovl_copy_up_ctx *c, struct dentry *temp)
 {
 	int err;
 	size_t block_count = c->stat.size/BLOCK_SIZE;
+	void *mem;
 
 	/*
 	 * Copy up data first and then xattrs. Writing data after
 	 * xattrs will remove security.capability xattr automatically.
 	 */
-	if (S_ISREG(c->stat.mode) && !c->metacopy) {
-		struct path upperpath, datapath;
+	if (S_ISREG(c->stat.mode) && !c->metacopy && c->stat.size!=0) {
+		// struct path upperpath, datapath;
 
-		ovl_path_upper(c->dentry, &upperpath);
-		if (WARN_ON(upperpath.dentry != NULL))
-			return -EIO;
-		upperpath.dentry = temp;
+		// ovl_path_upper(c->dentry, &upperpath);
+		// if (WARN_ON(upperpath.dentry != NULL))
+		// 	return -EIO;
+		// upperpath.dentry = temp;
 
-		ovl_path_lowerdata(c->dentry, &datapath);
-		err = ovl_copy_up_data(&datapath, &upperpath, c->stat.size);
-		if (err)
-			return err;
+		// ovl_path_lowerdata(c->dentry, &datapath);
+		// err = ovl_copy_up_data(&datapath, &upperpath, c->stat.size);
+		// if (err)
+		// 	return err;
 		//fzz_overlay: start
 		OVL_I(c->dentry->d_inode)->cow_status = 1;
 		OVL_I(c->dentry->d_inode)->block_count = 
 		c->stat.size%BLOCK_SIZE?block_count+1:block_count;
-		printk("fzz_overlay: copy_up_inode: cow_status = %d, block_count = %d", 
-			OVL_I(c->dentry->d_inode)->cow_status, 
-			OVL_I(c->dentry->d_inode)->block_count);
+		mem = kmalloc(block_count+1, GFP_KERNEL);
+		if(mem == NULL)
+		{
+			return -ENOMEM;
+		}
+		memset(mem, 0, block_count+1);
+		OVL_I(c->dentry->d_inode)->block_status = (char*)mem;
+		//ovl_open_meta(c->dentry->d_inode, c->dentry);
+		// printk("fzz_overlay: copy_up_inode: cow_status = %d, block_count = %d", 
+		// 	OVL_I(c->dentry->d_inode)->cow_status, 
+		// 	OVL_I(c->dentry->d_inode)->block_count);
 		//fzz_overlay: end
 	}
 
@@ -497,8 +506,8 @@ static int ovl_copy_up_inode(struct ovl_copy_up_ctx *c, struct dentry *temp)
 	}
 
 	inode_lock(temp->d_inode);
-	if (c->metacopy)
-		err = ovl_set_size(temp, &c->stat);
+	// if (c->metacopy)
+	err = ovl_set_size(temp, &c->stat);
 	if (!err)
 		err = ovl_set_attr(temp, &c->stat);
 	inode_unlock(temp->d_inode);
