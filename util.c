@@ -940,8 +940,6 @@ invalid:
 //fzz_overlay: start
 size_t ovl_get_block(size_t pos) 
 {
-	if(pos == 0) return 1;
-	size_t m = pos%BLOCK_SIZE;
-	return m?pos/BLOCK_SIZE+1:pos/BLOCK_SIZE;
+	return (pos+BLOCK_SIZE) / BLOCK_SIZE;
 }
 //fzz_overlay: end

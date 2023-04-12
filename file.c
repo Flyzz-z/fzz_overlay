@@ -233,11 +233,13 @@ static ssize_t block_read_iter(struct dentry *dentry,struct kiocb *iocb,struct i
 	size_t start_block,end_block;
 	size_t count,c_count=0;
 	ssize_t ret=0,cnt;
+	bool upper_end = false,lower_end = false;
 
 	start_block = ovl_get_block(iocb->ki_pos);
 	end_block = ovl_get_block(iocb->ki_pos+iter->count);
 	oi = OVL_I(dentry->d_inode);
 	count = iter->count;
+	printk("debug\n");
 	printk("fzz_overlay block_read_iter pos=%lld pos+count=%lld\n",iocb->ki_pos,iocb->ki_pos+iter->count);
 	printk("fzz_overlay block_read_iter start_block=%ld end_block=%ld count=%ld\n",start_block,end_block,count);
 	ovl_path_upper(dentry,&upper_path);
@@ -259,7 +261,9 @@ static ssize_t block_read_iter(struct dentry *dentry,struct kiocb *iocb,struct i
 		start_block = ovl_get_block(iocb->ki_pos);
 		end_block = ovl_get_block(iocb->ki_pos+count);
 		if(start_block>oi->block_count)
-		{
+		{	
+			if(upper_end)
+				return ret;
 			if(!oi->upper_file)
 			{	
 				oi->upper_file = ovl_path_open(&upper_path, O_RDWR);
@@ -269,6 +273,7 @@ static ssize_t block_read_iter(struct dentry *dentry,struct kiocb *iocb,struct i
 			cnt = vfs_iter_read(oi->upper_file, iter, &iocb->ki_pos,
 						ovl_iocb_to_rwf(iocb));
 			if(cnt<0) return 0;
+			printk("fzz_overlay: read upper file %s %ld\n",upper_path.dentry->d_name.name,cnt);
 			return ret+cnt;
 		}	
 
@@ -285,6 +290,8 @@ static ssize_t block_read_iter(struct dentry *dentry,struct kiocb *iocb,struct i
 
 		if(oi->block_status[start_block])
 		{
+			if(upper_end)
+				break;
 			if(!oi->upper_file)
 			{	
 				oi->upper_file = ovl_path_open(&upper_path, O_RDWR);
@@ -294,14 +301,31 @@ static ssize_t block_read_iter(struct dentry *dentry,struct kiocb *iocb,struct i
 					return PTR_ERR(oi->upper_file);
 				}
 			}	
-			cnt = vfs_iter_read(oi->upper_file, iter, &iocb->ki_pos,
+
+			while(c_count>0)
+			{
+				if(upper_end)
+					break;
+				cnt = vfs_iter_read(oi->upper_file, iter, &iocb->ki_pos,
 					    ovl_iocb_to_rwf(iocb));
-			if(cnt<=0) 
-				break;	
-			printk("fzz_overlay: read upper file %s %ld\n",upper_path.dentry->d_name.name,cnt);
+				if(cnt<0) 
+				{
+					break;	
+				} else if(cnt==0)
+				{
+					upper_end = true;
+					if(lower_end) break;
+				}
+				c_count -= cnt;
+				ret+=cnt;
+				count-=cnt;
+				printk("fzz_overlay: read upper file %s %ld\n",upper_path.dentry->d_name.name,cnt);
+			}
 		} 
 		else 
 		{
+			if(lower_end) 
+				break;
 			if(!oi->lower_file)
 			{
 				oi->lower_file = ovl_path_open(&lower_path, O_RDONLY);
@@ -311,14 +335,26 @@ static ssize_t block_read_iter(struct dentry *dentry,struct kiocb *iocb,struct i
 					return PTR_ERR(oi->lower_file);
 				}
 			}
-			cnt = vfs_iter_read(oi->lower_file, iter, &iocb->ki_pos,
-					    ovl_iocb_to_rwf(iocb));
-			if(cnt<=0)
-				break;
-			printk("fzz_overlay: read lower file %s %ld\n",lower_path.dentry->d_name.name,cnt);
+
+			while(c_count>0)
+			{
+				if(lower_end) 
+					break;
+				cnt = vfs_iter_read(oi->lower_file, iter, &iocb->ki_pos,
+							ovl_iocb_to_rwf(iocb));
+				if(cnt<0)
+				{
+					break;
+				} else if(cnt==0)
+				{
+					lower_end = true;
+				}
+				c_count -= cnt;
+				ret+=cnt;
+				count-=cnt;
+				printk("fzz_overlay: read lower file %s %ld\n",lower_path.dentry->d_name.name,cnt);
+			}
 		}
-		ret+=cnt;
-		count-=cnt;
 	}
 	return ret;
 }
@@ -372,7 +408,7 @@ static ssize_t block_write_iter(struct dentry *dentry,struct kiocb *iocb,struct 
 	bool partial = false;
 	struct ovl_inode *oi = OVL_I(dentry->d_inode);
 	struct path upper_path,lower_path;
-	ssize_t ret;
+	ssize_t ret=0,cnt;
 	
 	start_block = ovl_get_block(iocb->ki_pos);
 	end_block = ovl_get_block(iocb->ki_pos + iter->count);
@@ -410,10 +446,12 @@ static ssize_t block_write_iter(struct dentry *dentry,struct kiocb *iocb,struct 
 		}
 	}
 
-	if(end_block*BLOCK_SIZE<(iocb->ki_pos + iter->count)&&!oi->block_status[end_block])
+	printk("%ld %lld %lld\n",end_block*BLOCK_SIZE,(iocb->ki_pos + iter->count),iocb->ki_pos);
+	if(end_block*BLOCK_SIZE>(iocb->ki_pos + iter->count)&&!oi->block_status[end_block])
 	{
 		if(!(partial&&end_block==start_block))
 		{
+			printk("copy-up end block %lld\n",iocb->ki_pos);
 			if(!oi->upper_file)
 			{	
 				oi->upper_file = ovl_path_open(&upper_path, O_RDWR);
@@ -452,8 +490,15 @@ static ssize_t block_write_iter(struct dentry *dentry,struct kiocb *iocb,struct 
 		}
 	}
 	// vfs_fsync(oi->upper_file, 0);
-	ret = vfs_iter_write(oi->upper_file, iter, &iocb->ki_pos,
-		ovl_iocb_to_rwf(iocb));
+	while (ret<iter->count) {
+		cnt = vfs_iter_write(oi->upper_file, iter, &iocb->ki_pos,
+			ovl_iocb_to_rwf(iocb));
+		if(cnt<0)
+			return -1;
+		printk("fzz_overlay block_write_iter: %ld",cnt);
+		ret+=cnt;
+	}
+
 	//TODO: how to handle ret<len?
 	for(i=start_block;i<=end_block;i++)
 	{
