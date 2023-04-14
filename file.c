@@ -124,7 +124,7 @@ static int ovl_open(struct inode *inode, struct file *file)
 
 	/* No longer need these flags, so don't pass them on to underlying fs */
 	file->f_flags &= ~(O_CREAT | O_EXCL | O_NOCTTY | O_TRUNC);
-
+	//printk("fzz_overlay ovl_open %s\n",file->f_path.dentry->d_name.name);
 	realfile = ovl_open_realfile(file, ovl_inode_realdata(inode));
 	if (IS_ERR(realfile))
 		return PTR_ERR(realfile);
@@ -402,7 +402,7 @@ static ssize_t ovl_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 }
 
 //fzz_overlay: start
-static ssize_t block_write_iter(struct dentry *dentry,struct kiocb *iocb,struct iov_iter *iter)
+static ssize_t block_write_iter(struct dentry *dentry,struct file* realfile,struct kiocb *iocb,struct iov_iter *iter)
 {
 	size_t start_block,end_block,i;
 	bool partial = false;
@@ -415,7 +415,41 @@ static ssize_t block_write_iter(struct dentry *dentry,struct kiocb *iocb,struct 
 	ovl_path_upper(dentry,&upper_path);
 	ovl_path_lower(dentry,&lower_path);
 
-	printk("fzz_overlay block_write_iter: start_block %ld end_block %ld\n",start_block,end_block);
+	//printk("fzz_overlay block_write_iter: start_block %ld end_block %ld\n",start_block,end_block);
+	//printk("fzz_overlay block_write: start pos %lld  end pos %lld\n",iocb->ki_pos,iocb->ki_pos + iter->count);
+	if(realfile->f_flags&O_APPEND)
+	{
+		if(!oi->upper_file)
+		{	
+			oi->upper_file = ovl_path_open(&upper_path, O_RDWR);
+			if (IS_ERR(oi->upper_file))
+			{
+				printk("fzz_overlay block_write_iter: open upper file error\n");
+				return PTR_ERR(oi->upper_file);
+			}
+		}
+		if(!oi->lower_file)
+		{
+			oi->lower_file = ovl_path_open(&lower_path, O_RDONLY);
+			if (IS_ERR(oi->lower_file))
+			{
+				printk("fzz_overlay block_write_iter: open lower file error\n");
+				return PTR_ERR(oi->lower_file);
+			}
+		}
+		if(!oi->block_status[end_block])
+		{
+			ret = ovl_copy_up_block(oi->lower_file,oi->upper_file,
+				(end_block-1)*BLOCK_SIZE,BLOCK_SIZE);
+			if(ret<0)
+			{
+				printk("fzz_overlay block_write_iter: copy up block error upper:%s\n",oi->upper_file->f_path.dentry->d_name.name);
+				return ret;
+			}
+		}
+		goto copy_done;
+	}
+
 	if(iocb->ki_pos>(start_block-1)*BLOCK_SIZE&&!oi->block_status[start_block])
 	{
 		partial = true;
@@ -470,7 +504,7 @@ static ssize_t block_write_iter(struct dentry *dentry,struct kiocb *iocb,struct 
 					return PTR_ERR(oi->lower_file);
 				}
 			}
-			ovl_copy_up_block(oi->lower_file,oi->upper_file,
+			ret = ovl_copy_up_block(oi->lower_file,oi->upper_file,
 				(end_block-1)*BLOCK_SIZE,BLOCK_SIZE);
 			if(ret<0)
 			{
@@ -480,18 +514,19 @@ static ssize_t block_write_iter(struct dentry *dentry,struct kiocb *iocb,struct 
 		}
 	}
 
-	if(!oi->upper_file)
-	{	
-		oi->upper_file = ovl_path_open(&upper_path, O_RDWR);
-		if (IS_ERR(oi->upper_file))
-		{
-			printk("fzz_overlay block_write_iter: open upper file error\n");
-			return PTR_ERR(oi->upper_file);
-		}
-	}
+copy_done: ret = 0;
+	// if(!oi->upper_file)
+	// {	
+	// 	oi->upper_file = ovl_path_open(&upper_path, O_RDWR);
+	// 	if (IS_ERR(oi->upper_file))
+	// 	{
+	// 		printk("fzz_overlay block_write_iter: open upper file error\n");
+	// 		return PTR_ERR(oi->upper_file);
+	// 	}
+	// }
 	// vfs_fsync(oi->upper_file, 0);
 	while (ret<iter->count) {
-		cnt = vfs_iter_write(oi->upper_file, iter, &iocb->ki_pos,
+		cnt = vfs_iter_write(realfile, iter, &iocb->ki_pos,
 			ovl_iocb_to_rwf(iocb));
 		if(cnt<0)
 			return -1;
@@ -548,7 +583,7 @@ static ssize_t ovl_write_iter(struct kiocb *iocb, struct iov_iter *iter)
 	if(OVL_I(inode)->cow_status)
 	{
 		//printk("write_block start\n");
-		ret = block_write_iter(file_dentry(file),iocb,iter);
+		ret = block_write_iter(file_dentry(file),real.file,iocb,iter);
 	}
 	else
 	{

@@ -506,8 +506,8 @@ static int ovl_copy_up_inode(struct ovl_copy_up_ctx *c, struct dentry *temp)
 	}
 
 	inode_lock(temp->d_inode);
-	// if (c->metacopy)
-	err = ovl_set_size(temp, &c->stat);
+	if (c->metacopy)
+		err = ovl_set_size(temp, &c->stat);
 	if (!err)
 		err = ovl_set_attr(temp, &c->stat);
 	inode_unlock(temp->d_inode);
