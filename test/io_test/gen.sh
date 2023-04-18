@@ -1,0 +1,1 @@
+head -c2048000000 /dev/urandom > file_2g 

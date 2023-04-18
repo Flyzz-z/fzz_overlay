@@ -1,0 +1,19 @@
+fio_version：    fio 的版本号。
+timestamp：      测试的时间戳。
+time：           测试的日期和时间。
+global options： 全局的选项设置。
+jobs：           测试的 job 列表，每个 job 包含以下字段：
+jobname：        job 的名称。
+groupid：         job  所属的组的 ID。
+error：          job 是否出错，0 表示正常，非 0 表示错误码。
+eta：            job 的预计完成时间，单位是秒。
+elapsed：        job 的已经运行时间，单位是秒。
+job options：    job 的选项设置。
+read/write：     读写操作的性能指标，包括以下字段：
+io_bytes：       读写的总字节数。
+bw_bytes：       读写的平均带宽，单位是字节/秒。
+iops：           读写的平均 IOPS，单位是次/秒。
+runtime：        读写操作的运行时间，单位是毫秒。
+total_ios：      读写操作的总次数。
+short_ios：      读写操作的短次数，即未完成预期大小的次数。
+drop_ios：       读写操作的丢弃次数，即超时未完成的次数。

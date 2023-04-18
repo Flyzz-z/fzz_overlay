@@ -1,0 +1,1 @@
+sudo docker run --detach --name some-mariadb --env MARIADB_USER=flyzz --env MARIADB_PASSWORD=20010121 --env MARIADB_ROOT_PASSWORD=20010121  -p 3306:3306 mariadb:10.6                                                                           
