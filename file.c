@@ -266,7 +266,7 @@ static ssize_t block_read_iter(struct dentry *dentry,struct kiocb *iocb,struct i
 				return ret;
 			if(!oi->upper_file)
 			{	
-				oi->upper_file = ovl_path_open(&upper_path, O_RDWR);
+				oi->upper_file = ovl_path_open(&upper_path, O_RDWR|O_LARGEFILE);
 				if (IS_ERR(oi->upper_file))
 					return PTR_ERR(oi->upper_file);
 			}
@@ -294,7 +294,7 @@ static ssize_t block_read_iter(struct dentry *dentry,struct kiocb *iocb,struct i
 				break;
 			if(!oi->upper_file)
 			{	
-				oi->upper_file = ovl_path_open(&upper_path, O_RDWR);
+				oi->upper_file = ovl_path_open(&upper_path, O_RDWR|O_LARGEFILE);
 				if (IS_ERR(oi->upper_file))
 				{
 					printk("fzz_overlay: open upper file error\n");
@@ -328,7 +328,7 @@ static ssize_t block_read_iter(struct dentry *dentry,struct kiocb *iocb,struct i
 				break;
 			if(!oi->lower_file)
 			{
-				oi->lower_file = ovl_path_open(&lower_path, O_RDONLY);
+				oi->lower_file = ovl_path_open(&lower_path, O_RDONLY|O_LARGEFILE);
 				if (IS_ERR(oi->lower_file))
 				{
 					printk("fzz_overlay: open lower file error\n");
@@ -421,7 +421,7 @@ static ssize_t block_write_iter(struct dentry *dentry,struct file* realfile,stru
 	{
 		if(!oi->upper_file)
 		{	
-			oi->upper_file = ovl_path_open(&upper_path, O_RDWR);
+			oi->upper_file = ovl_path_open(&upper_path, O_RDWR|O_LARGEFILE);
 			if (IS_ERR(oi->upper_file))
 			{
 				printk("fzz_overlay block_write_iter: open upper file error\n");
@@ -430,7 +430,7 @@ static ssize_t block_write_iter(struct dentry *dentry,struct file* realfile,stru
 		}
 		if(!oi->lower_file)
 		{
-			oi->lower_file = ovl_path_open(&lower_path, O_RDONLY);
+			oi->lower_file = ovl_path_open(&lower_path, O_RDONLY|O_LARGEFILE);
 			if (IS_ERR(oi->lower_file))
 			{
 				printk("fzz_overlay block_write_iter: open lower file error\n");
@@ -455,7 +455,7 @@ static ssize_t block_write_iter(struct dentry *dentry,struct file* realfile,stru
 		partial = true;
 		if(!oi->upper_file)
 		{	
-			oi->upper_file = ovl_path_open(&upper_path, O_RDWR);
+			oi->upper_file = ovl_path_open(&upper_path, O_RDWR|O_LARGEFILE);
 			if (IS_ERR(oi->upper_file))
 			{
 				printk("fzz_overlay block_write_iter: open upper file error\n");
@@ -464,7 +464,7 @@ static ssize_t block_write_iter(struct dentry *dentry,struct file* realfile,stru
 		}
 		if(!oi->lower_file)
 		{
-			oi->lower_file = ovl_path_open(&lower_path, O_RDONLY);
+			oi->lower_file = ovl_path_open(&lower_path, O_RDONLY|O_LARGEFILE);
 			if (IS_ERR(oi->lower_file))
 			{
 				printk("fzz_overlay block_write_iter: open lower file error\n");
@@ -488,7 +488,7 @@ static ssize_t block_write_iter(struct dentry *dentry,struct file* realfile,stru
 			//printk("copy-up end block %lld\n",iocb->ki_pos);
 			if(!oi->upper_file)
 			{	
-				oi->upper_file = ovl_path_open(&upper_path, O_RDWR);
+				oi->upper_file = ovl_path_open(&upper_path, O_RDWR|O_LARGEFILE);
 				if (IS_ERR(oi->upper_file))
 				{
 					printk("fzz_overlay block_write_iter: open upper file error\n");
@@ -497,7 +497,7 @@ static ssize_t block_write_iter(struct dentry *dentry,struct file* realfile,stru
 			}
 			if(!oi->lower_file)
 			{
-				oi->lower_file = ovl_path_open(&lower_path, O_RDONLY);
+				oi->lower_file = ovl_path_open(&lower_path, O_RDONLY|O_LARGEFILE);
 				if (IS_ERR(oi->lower_file))
 				{
 					printk("fzz_overlay block_write_iter: open lower file error\n");
