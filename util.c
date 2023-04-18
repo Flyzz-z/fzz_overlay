@@ -942,4 +942,32 @@ size_t ovl_get_block(size_t pos)
 {
 	return (pos+BLOCK_SIZE) / BLOCK_SIZE;
 }
+
+void ovl_open_meta(struct dentry *dentry, int block_count)
+{
+	char file_name[256];
+	struct dentry *work_dentry = ovl_workdir(dentry);
+	sprintf(file_name, "%s/meta_%lu", work_dentry->d_name.name, dentry->d_inode->i_ino);
+	struct file *meta_file = filp_open(file_name, O_RDWR | O_CREAT, 0644);
+	if (IS_ERR(meta_file)) {
+		printk("open file %s failed\n", file_name);
+		return;
+	}
+
+	if(meta_file->f_inode->i_size == 0) {
+		int cnt = 0;
+		char *buf = kzalloc(block_count + 1, GFP_KERNEL);
+		memset(buf, 0, block_count+1);
+		memcpy(buf, &block_count, 1);
+		cnt = kernel_write(meta_file, buf, block_count + 1, 0);
+		if(cnt<0)
+		{
+			printk("init meta file %s failed\n", file_name);
+			kfree(buf);
+			return;
+		}
+	}
+
+	OVL_I(dentry->d_inode)->meta_file = meta_file;
+}
 //fzz_overlay: end

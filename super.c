@@ -213,6 +213,9 @@ static void ovl_free_inode(struct inode *inode)
 	if(oi->upper_file != NULL) {
 		filp_close(oi->upper_file, NULL);
 	}
+	if(oi->meta_file != NULL) {
+		filp_close(oi->meta_file, NULL);
+	}
 	if(oi->block_status)
 		kfree(oi->block_status);
 	//fzz_overlay: end

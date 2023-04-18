@@ -474,7 +474,7 @@ static int ovl_copy_up_inode(struct ovl_copy_up_ctx *c, struct dentry *temp)
 		}
 		memset(mem, 0, block_count+1);
 		OVL_I(c->dentry->d_inode)->block_status = (char*)mem;
-		//ovl_open_meta(c->dentry->d_inode, c->dentry);
+		ovl_open_meta(c->dentry,block_count);
 		// printk("fzz_overlay: copy_up_inode: cow_status = %d, block_count = %d", 
 		// 	OVL_I(c->dentry->d_inode)->cow_status, 
 		// 	OVL_I(c->dentry->d_inode)->block_count);
