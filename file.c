@@ -10,6 +10,11 @@
 #include <linux/uio.h>
 #include <linux/uaccess.h>
 #include "overlayfs.h"
+#include <linux/kfifo.h>
+
+//fzz_overlay: start
+extern struct kfifo meta_save_fifo;
+//fzz_overlay: end
 
 static char ovl_whatisit(struct inode *inode, struct inode *realinode)
 {
@@ -243,13 +248,13 @@ static ssize_t block_read_iter(struct dentry *dentry,struct kiocb *iocb,struct i
 	//printk("fzz_overlay block_read_iter pos=%lld pos+count=%lld\n",iocb->ki_pos,iocb->ki_pos+iter->count);
 	//printk("fzz_overlay block_read_iter start_block=%ld end_block=%ld count=%ld\n",start_block,end_block,count);
 	ovl_path_upper(dentry,&upper_path);
-	if(IS_ERR(&upper_path))
+	if(unlikely(IS_ERR(&upper_path)))
 	{
 		return PTR_ERR(&upper_path);
 	}
 
 	ovl_path_lowerdata(dentry,&lower_path);
-	if(IS_ERR(&lower_path))
+	if(unlikely(IS_ERR(&lower_path)))
 	{
 		return PTR_ERR(&lower_path);
 	}
@@ -273,7 +278,7 @@ static ssize_t block_read_iter(struct dentry *dentry,struct kiocb *iocb,struct i
 			cnt = vfs_iter_read(oi->upper_file, iter, &iocb->ki_pos,
 						ovl_iocb_to_rwf(iocb));
 			if(cnt<0) return 0;
-			printk("fzz_overlay: read upper file %s %ld\n",upper_path.dentry->d_name.name,cnt);
+			//printk("fzz_overlay: read upper file %s %ld\n",upper_path.dentry->d_name.name,cnt);
 			return ret+cnt;
 		}	
 
@@ -329,7 +334,7 @@ static ssize_t block_read_iter(struct dentry *dentry,struct kiocb *iocb,struct i
 			if(!oi->lower_file)
 			{
 				oi->lower_file = ovl_path_open(&lower_path, O_RDONLY|O_LARGEFILE);
-				if (IS_ERR(oi->lower_file))
+				if (unlikely(IS_ERR(oi->lower_file)))
 				{
 					printk("fzz_overlay: open lower file error\n");
 					return PTR_ERR(oi->lower_file);
@@ -422,7 +427,7 @@ static ssize_t block_write_iter(struct dentry *dentry,struct file* realfile,stru
 		if(!oi->upper_file)
 		{	
 			oi->upper_file = ovl_path_open(&upper_path, O_RDWR|O_LARGEFILE);
-			if (IS_ERR(oi->upper_file))
+			if (unlikely(IS_ERR(oi->upper_file)))
 			{
 				printk("fzz_overlay block_write_iter: open upper file error\n");
 				return PTR_ERR(oi->upper_file);
@@ -431,7 +436,7 @@ static ssize_t block_write_iter(struct dentry *dentry,struct file* realfile,stru
 		if(!oi->lower_file)
 		{
 			oi->lower_file = ovl_path_open(&lower_path, O_RDONLY|O_LARGEFILE);
-			if (IS_ERR(oi->lower_file))
+			if (unlikely(IS_ERR(oi->lower_file)))
 			{
 				printk("fzz_overlay block_write_iter: open lower file error\n");
 				return PTR_ERR(oi->lower_file);
@@ -447,6 +452,7 @@ static ssize_t block_write_iter(struct dentry *dentry,struct file* realfile,stru
 				return ret;
 			}
 		}
+		start_block = end_block;
 		goto copy_done;
 	}
 
@@ -456,7 +462,7 @@ static ssize_t block_write_iter(struct dentry *dentry,struct file* realfile,stru
 		if(!oi->upper_file)
 		{	
 			oi->upper_file = ovl_path_open(&upper_path, O_RDWR|O_LARGEFILE);
-			if (IS_ERR(oi->upper_file))
+			if (unlikely(IS_ERR(oi->upper_file)))
 			{
 				printk("fzz_overlay block_write_iter: open upper file error\n");
 				return PTR_ERR(oi->upper_file);
@@ -465,7 +471,7 @@ static ssize_t block_write_iter(struct dentry *dentry,struct file* realfile,stru
 		if(!oi->lower_file)
 		{
 			oi->lower_file = ovl_path_open(&lower_path, O_RDONLY|O_LARGEFILE);
-			if (IS_ERR(oi->lower_file))
+			if (unlikely(IS_ERR(oi->lower_file)))
 			{
 				printk("fzz_overlay block_write_iter: open lower file error\n");
 				return PTR_ERR(oi->lower_file);
@@ -545,6 +551,21 @@ copy_done: ret = 0;
 			oi->copy_count++;
 		}
 	}
+
+	if(oi->meta_file)
+	{
+		unsigned int start = start_block,end = end>oi->block_count?oi->block_count:end_block;
+		struct meta_save_task task;
+		task.meta_file = oi->meta_file;
+		task.start = start;
+		task.end = end;
+		if(!kfifo_is_full(&meta_save_fifo))
+		{	
+			kfifo_in(&meta_save_fifo, &task,sizeof(struct meta_save_task));
+		}
+	}
+
+
 	if(oi->copy_count==oi->block_count)
 	{
 		oi->cow_status = false;

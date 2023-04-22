@@ -467,6 +467,7 @@ static int ovl_copy_up_inode(struct ovl_copy_up_ctx *c, struct dentry *temp)
 		OVL_I(c->dentry->d_inode)->cow_status = 1;
 		OVL_I(c->dentry->d_inode)->block_count = 
 		c->stat.size%BLOCK_SIZE?block_count+1:block_count;
+		block_count = OVL_I(c->dentry->d_inode)->block_count;
 		mem = kmalloc(block_count+1, GFP_KERNEL);
 		if(mem == NULL)
 		{

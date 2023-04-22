@@ -124,6 +124,15 @@ struct ovl_inode {
 	//fzz_overlay: end
 };
 
+//fzz_overlay: start
+struct meta_save_task
+{
+	struct file *meta_file;
+	unsigned int start;
+	unsigned int  end;
+};
+//fzz_overlay: end
+
 //获取ovl_inode
 static inline struct ovl_inode *OVL_I(struct inode *inode)
 {

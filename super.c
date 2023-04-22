@@ -16,12 +16,22 @@
 #include <linux/posix_acl_xattr.h>
 #include <linux/exportfs.h>
 #include "overlayfs.h"
+#include <linux/kthread.h>
+#include <linux/kfifo.h>
+#include <linux/delay.h>
 
 MODULE_AUTHOR("Miklos Szeredi <miklos@szeredi.hu>");
 MODULE_DESCRIPTION("Overlay filesystem");
 MODULE_LICENSE("GPL");
 
 
+//fzz_overlay: start
+#define WORK_TASK_NUM 4096
+struct kfifo meta_save_fifo;
+struct meta_save_task buf[WORK_TASK_NUM*sizeof(struct meta_save_task)];
+struct meta_save_task tasks[4096*4];
+struct task_struct *meta_save_thread;
+//fzz_overlay: end
 struct ovl_dir_cache;
 
 #define OVL_MAX_STACK 500
@@ -171,7 +181,6 @@ static struct kmem_cache *ovl_inode_cachep;
 static struct inode *ovl_alloc_inode(struct super_block *sb)
 {
 	struct ovl_inode *oi = kmem_cache_alloc(ovl_inode_cachep, GFP_KERNEL);
-	int i;
 
 	if (!oi)
 		return NULL;
@@ -266,7 +275,61 @@ static void ovl_free_fs(struct ovl_fs *ofs)
 	if (ofs->creator_cred)
 		put_cred(ofs->creator_cred);
 	kfree(ofs);
+
+	if(meta_save_thread)
+		kthread_stop(meta_save_thread);
 }
+
+//fzz_overlay: start
+static int  ovl_meta_save(void *data)
+{
+	int n,i;
+	char *mem = kzalloc(4096, GFP_KERNEL);
+	unsigned int  start,end;
+
+	for(i=0;i<4096;i++)
+	{	
+		mem[i] = 1;
+	}
+
+	for(;;) {
+		if(kthread_should_stop())
+			break;
+		n = kfifo_out(&meta_save_fifo, buf, WORK_TASK_NUM*sizeof(struct meta_save_task));
+		if(n>0)
+			printk("get fifo %d\n",n);
+		n = n/sizeof(struct meta_save_task);
+		for(i=0;i<n;i++) 
+		{	
+			start = buf[i].start;
+			end = buf[i].end;
+			if(!buf[i].meta_file) continue;
+			file_start_write(buf[i].meta_file);
+
+			int cnt;
+			unsigned int len = end - start + 1;
+			long long  written = 4,to_write;
+			while(len)
+			{
+				to_write = len>4096?4096:len;
+				cnt = kernel_write(buf[i].meta_file,mem, to_write, &written);
+				if(cnt<0)
+				{
+					break;
+				}
+				len -= cnt;
+				written+=cnt;
+			}
+			file_end_write(buf[i].meta_file);
+		}
+		if (kthread_should_stop())
+			break;
+		if(n < WORK_TASK_NUM)
+			msleep(2);
+	}
+	return 0;
+}
+//fzz_overlay: end
 
 static void ovl_put_super(struct super_block *sb)
 {
@@ -1735,6 +1798,8 @@ out:
 static struct dentry *ovl_mount(struct file_system_type *fs_type, int flags,
 				const char *dev_name, void *raw_data)
 {
+	kfifo_init(&meta_save_fifo,tasks,4096*2*sizeof(struct meta_save_task));
+	meta_save_thread = kthread_run(ovl_meta_save, NULL, "meta_save");
 	return mount_nodev(fs_type, flags, raw_data, ovl_fill_super);
 }
 

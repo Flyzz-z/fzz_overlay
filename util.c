@@ -947,7 +947,7 @@ void ovl_open_meta(struct dentry *dentry, int block_count)
 {
 	char file_name[256];
 	struct dentry *work_dentry = ovl_workdir(dentry);
-	sprintf(file_name, "%s/meta_%lu", work_dentry->d_name.name, dentry->d_inode->i_ino);
+	sprintf(file_name, "/etc/%s/meta_%lu", work_dentry->d_name.name, dentry->d_inode->i_ino);
 	struct file *meta_file = filp_open(file_name, O_RDWR | O_CREAT, 0644);
 	if (IS_ERR(meta_file)) {
 		printk("open file %s failed\n", file_name);
@@ -956,14 +956,24 @@ void ovl_open_meta(struct dentry *dentry, int block_count)
 
 	if(meta_file->f_inode->i_size == 0) {
 		int cnt = 0;
-		char *buf = kzalloc(block_count + 1, GFP_KERNEL);
-		memset(buf, 0, block_count+1);
-		memcpy(buf, &block_count, 1);
-		cnt = kernel_write(meta_file, buf, block_count + 1, 0);
+		char *buf = kzalloc(block_count + 4, GFP_KERNEL);
+		memset(buf, 0, block_count+4);
+		memcpy(buf, &block_count, 4);
+		cnt = kernel_write(meta_file, buf, block_count+4, 0);
 		if(cnt<0)
 		{
 			printk("init meta file %s failed\n", file_name);
 			kfree(buf);
+			return;
+		}
+		kfree(buf);
+	} else {
+		int cnt;
+		loff_t offset = 4;
+		cnt = kernel_read(meta_file, OVL_I(dentry->d_inode)->block_status,block_count, &offset);
+		if(cnt<0)
+		{
+			printk("read meta file %s failed\n", file_name);
 			return;
 		}
 	}
