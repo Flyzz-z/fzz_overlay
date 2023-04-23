@@ -407,11 +407,6 @@ static ssize_t ovl_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 }
 
 //fzz_overlay: start
-static ssize_t async_block_write_iter(struct dentry *dentry,struct file* realfile,struct kiocb *iocb,struct iov_iter *iter)
-{
-	
-}
-
 static ssize_t block_write_iter(struct dentry *dentry,struct file* realfile,struct kiocb *iocb,struct iov_iter *iter)
 {
 	size_t start_block,end_block,i;
