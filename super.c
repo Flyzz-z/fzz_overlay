@@ -308,7 +308,7 @@ static int  ovl_meta_save(void *data)
 
 			int cnt;
 			unsigned int len = end - start + 1;
-			long long  written = 4,to_write;
+			long long  written = 5,to_write;
 			while(len)
 			{
 				to_write = len>4096?4096:len;
@@ -1800,6 +1800,7 @@ static struct dentry *ovl_mount(struct file_system_type *fs_type, int flags,
 {
 	kfifo_init(&meta_save_fifo,tasks,4096*2*sizeof(struct meta_save_task));
 	meta_save_thread = kthread_run(ovl_meta_save, NULL, "meta_save");
+	printk("fzz_overlay mount success\n");
 	return mount_nodev(fs_type, flags, raw_data, ovl_fill_super);
 }
 

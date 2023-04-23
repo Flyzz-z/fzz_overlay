@@ -120,6 +120,7 @@ struct ovl_inode {
 	struct file *lower_file;
 	struct file *upper_file;
 	struct file *meta_file;
+	// 0 未拷贝 1 拷贝完  2 拷贝中 
 	char *block_status;
 	//fzz_overlay: end
 };

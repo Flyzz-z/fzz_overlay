@@ -279,7 +279,7 @@ ssize_t ovl_getxattr(struct dentry *dentry, char *name, char **value,
 		     size_t padding);
 //fzz_overlay: start
 size_t  ovl_get_block(size_t  pos);
-void ovl_open_meta(struct dentry*,int);
+void ovl_open_meta(struct dentry*,int,unsigned long);
 //fzz_overlay: end
 static inline bool ovl_is_impuredir(struct dentry *dentry)
 {

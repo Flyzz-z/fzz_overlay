@@ -943,23 +943,32 @@ size_t ovl_get_block(size_t pos)
 	return (pos+BLOCK_SIZE) / BLOCK_SIZE;
 }
 
-void ovl_open_meta(struct dentry *dentry, int block_count)
+void ovl_open_meta(struct dentry *dentry, int block_count,unsigned long ino)
 {
+	if(OVL_I(dentry->d_inode)->meta_file)
+		return;
+
 	char file_name[256];
-	struct dentry *work_dentry = ovl_workdir(dentry);
-	sprintf(file_name, "/etc/%s/meta_%lu", work_dentry->d_name.name, dentry->d_inode->i_ino);
-	struct file *meta_file = filp_open(file_name, O_RDWR | O_CREAT, 0644);
+	if(ino==0)
+		ino = ovl_dentry_upper(dentry)->d_inode->i_ino;
+
+	// not 
+	return;
+	sprintf(file_name, "/etc/overlay/meta_%lu", ino);
+	struct file *meta_file = filp_open(file_name, O_RDWR | O_CREAT, 0666);
+
 	if (IS_ERR(meta_file)) {
 		printk("open file %s failed\n", file_name);
 		return;
 	}
 
 	if(meta_file->f_inode->i_size == 0) {
+		printk("block_count should>0 %d\n",block_count);
 		int cnt = 0;
-		char *buf = kzalloc(block_count + 4, GFP_KERNEL);
-		memset(buf, 0, block_count+4);
+		char *buf = kzalloc(block_count + 5, GFP_KERNEL);
+		memset(buf, 0, block_count+5);
 		memcpy(buf, &block_count, 4);
-		cnt = kernel_write(meta_file, buf, block_count+4, 0);
+		cnt = kernel_write(meta_file, buf, block_count+5, 0);
 		if(cnt<0)
 		{
 			printk("init meta file %s failed\n", file_name);
@@ -968,9 +977,39 @@ void ovl_open_meta(struct dentry *dentry, int block_count)
 		}
 		kfree(buf);
 	} else {
+		//block_count == 0
 		int cnt;
 		loff_t offset = 4;
+		bool copy_done;
+		cnt = kernel_read(meta_file, &block_count,4, 0);
+		if(cnt<0)
+		{
+			printk("read meta file %s failed\n", file_name);
+			return;
+		}
+		printk("read block_count %d\n",block_count);
+		cnt = kernel_read(meta_file, &copy_done,1, &offset);
+		if(cnt<0)
+		{
+			printk("read meta file %s failed\n", file_name);
+			return;
+		}
+		offset = 5;
 		cnt = kernel_read(meta_file, OVL_I(dentry->d_inode)->block_status,block_count, &offset);
+		if (cnt<0) {
+			printk("read meta file %s failed\n", file_name);
+			return;
+		}
+		OVL_I(dentry->d_inode)->cow_status = copy_done;
+		OVL_I(dentry->d_inode)->block_count = block_count;
+
+		// test
+		int i;
+		for(i=1;i<=block_count;i++) 
+		{
+			printk("status %d",OVL_I(dentry->d_inode)->block_status[i]);
+		}
+		printk("\n");
 		if(cnt<0)
 		{
 			printk("read meta file %s failed\n", file_name);
