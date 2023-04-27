@@ -19,6 +19,8 @@
 #include <linux/kthread.h>
 #include <linux/kfifo.h>
 #include <linux/delay.h>
+#include <linux/spinlock.h>
+#include <linux/hashtable.h>
 
 MODULE_AUTHOR("Miklos Szeredi <miklos@szeredi.hu>");
 MODULE_DESCRIPTION("Overlay filesystem");
@@ -31,6 +33,9 @@ struct kfifo meta_save_fifo;
 struct meta_save_task buf[WORK_TASK_NUM*sizeof(struct meta_save_task)];
 struct meta_save_task tasks[4096*4];
 struct task_struct *meta_save_thread;
+struct task_struct *block_copy_thread;
+DEFINE_HASHTABLE(copying_block_table, ENTRY_NUM);
+struct spinlock entry_locks[1<<ENTRY_NUM];
 //fzz_overlay: end
 struct ovl_dir_cache;
 
@@ -274,10 +279,7 @@ static void ovl_free_fs(struct ovl_fs *ofs)
 	kfree(ofs->config.redirect_mode);
 	if (ofs->creator_cred)
 		put_cred(ofs->creator_cred);
-	kfree(ofs);
-
-	if(meta_save_thread)
-		kthread_stop(meta_save_thread);
+	kfree(ofs);	
 }
 
 //fzz_overlay: start
@@ -329,12 +331,64 @@ static int  ovl_meta_save(void *data)
 	}
 	return 0;
 }
-//fzz_overlay: end
 
+static int  ovl_block_copy(void *data)
+{
+	int bkt;
+	struct block_copy_req *req;
+	struct hlist_node *tmp;
+
+	for(;;)
+	{
+		if (kthread_should_stop())
+			break;
+		
+		for(bkt=0,req=NULL;req==NULL && bkt<HASH_SIZE(copying_block_table);bkt++)
+		{
+			if (kthread_should_stop())
+				break;
+			int lock = spin_trylock(&entry_locks[bkt]);
+			if(lock<0)
+				continue;
+			hash_for_each_possible_safe(copying_block_table,req,tmp,copy_req_list,bkt)
+			{
+				//printk("ovl_block_copy: get req %ld pos %lld len %ld\n",req->block_id,req->offset,req->len);
+				struct ovl_inode *oi = OVL_I(req->dentry->d_inode);
+				if(READ_ONCE(oi->block_status[req->block_id]) != COPYING || req->len == 0)
+				{
+					// del
+					//printk("block status %d\n",oi->block_status[req->block_id]);
+				} else {
+					ovl_copy_up_block(oi->lower_file,oi->upper_file,req->offset,req->len);
+					WRITE_ONCE(oi->block_status[req->block_id] ,COPIED);
+					//printk("async copy block %d pos %lld len %lld\n",req->block_id,req->offset,req->len);
+				}
+
+				//do del 
+				hash_del(&req->copy_req_list);
+			}
+			spin_unlock(&entry_locks[bkt]);
+
+			if (kthread_should_stop())
+				break;
+			schedule();
+		}
+		
+		if (kthread_should_stop())
+			break;
+
+		//msleep(3);
+	}
+}
+//fzz_overlay: end
 static void ovl_put_super(struct super_block *sb)
 {
 	struct ovl_fs *ofs = sb->s_fs_info;
 
+	if(meta_save_thread)
+		kthread_stop(meta_save_thread);
+	if(block_copy_thread)
+		kthread_stop(block_copy_thread);
 	ovl_free_fs(ofs);
 }
 
@@ -1799,7 +1853,13 @@ static struct dentry *ovl_mount(struct file_system_type *fs_type, int flags,
 				const char *dev_name, void *raw_data)
 {
 	kfifo_init(&meta_save_fifo,tasks,4096*2*sizeof(struct meta_save_task));
-	meta_save_thread = kthread_run(ovl_meta_save, NULL, "meta_save");
+	//meta_save_thread = kthread_run(ovl_meta_save, NULL, "meta_save");
+	int i=0;
+	for(i = 0;i<(1<<ENTRY_NUM);i++)
+	{
+		spin_lock_init(&entry_locks[i]);
+	}
+	block_copy_thread = kthread_run(ovl_block_copy,NULL,"block_copy");
 	printk("fzz_overlay mount success\n");
 	return mount_nodev(fs_type, flags, raw_data, ovl_fill_super);
 }

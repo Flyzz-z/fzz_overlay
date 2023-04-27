@@ -5,7 +5,12 @@
  * Copyright (C) 2016 Red Hat, Inc.
  */
 #define MAX_BLOCK_NUM 1024 
-#define BLOCK_SIZE 4096
+#define BLOCK_SIZE 4096ull
+#define ENTRY_NUM 20
+
+#define UNCOPY 0
+#define COPIED 1
+#define COPYING 2
 
 struct ovl_config {
 	char *lowerdir;
@@ -131,6 +136,15 @@ struct meta_save_task
 	struct file *meta_file;
 	unsigned int start;
 	unsigned int  end;
+};
+
+struct block_copy_req
+{
+	struct dentry *dentry; // get ovl_inode
+	size_t block_id;
+	loff_t offset;
+	size_t len;
+	struct hlist_node copy_req_list;
 };
 //fzz_overlay: end
 

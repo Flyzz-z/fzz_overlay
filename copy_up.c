@@ -992,5 +992,6 @@ int ovl_copy_up_block(struct file *lower_file, struct file *upper_file, loff_t p
 		len -= bytes;
 	}
 out:
+	vfs_fsync_range(upper_file, pos, pos+BLOCK_SIZE, 0);
 	return error;
 }

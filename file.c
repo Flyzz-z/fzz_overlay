@@ -11,13 +11,17 @@
 #include <linux/uaccess.h>
 #include "overlayfs.h"
 #include <linux/kfifo.h>
+#include <linux/spinlock.h>
+#include <linux/hashtable.h>
 
 //fzz_overlay: start
 extern struct kfifo meta_save_fifo;
+extern struct hlist_head copying_block_table[1<<ENTRY_NUM];
+extern struct spinlock entry_locks[1<<ENTRY_NUM];
 //fzz_overlay: end
 
 static char ovl_whatisit(struct inode *inode, struct inode *realinode)
-{
+{	
 	if (realinode != ovl_inode_upper(inode))
 		return 'l';
 	if (ovl_has_upperdata(inode))
@@ -231,6 +235,182 @@ static rwf_t ovl_iocb_to_rwf(struct kiocb *iocb)
 }
 
 //fzz_overlay: start
+static ssize_t speed_block_copy(struct dentry *dentry,size_t block_id)
+{
+	struct block_copy_req *req;
+	struct hlist_node *tmp;
+	struct ovl_inode *oi = OVL_I(dentry->d_inode);
+	ssize_t ret = 0;
+
+	hash_for_each_possible_safe(copying_block_table,req,tmp,copy_req_list,block_id)
+	{
+		if(req->dentry == dentry && req->block_id == block_id)
+		{
+			ret = ovl_copy_up_block(oi->lower_file, oi->upper_file, req->offset, req->len);
+			if(ret <0) 
+			{
+				printk("speed_block_copy: copy up block failed\n");
+				return ret;
+			}
+			WRITE_ONCE(oi->block_status[block_id], COPIED);
+			//printk("speed copy up id %ld pos %lld len %ld\n",req->block_id,req->offset,req->len);
+			break;
+		}
+	}
+	return ret;
+}
+
+static ssize_t async_block_read_iter(struct dentry *dentry,struct kiocb *iocb,struct iov_iter *iter)
+{
+	struct ovl_inode *oi;
+	struct path upper_path,lower_path;
+	size_t start_block,end_block;
+	size_t count,c_count=0;
+	ssize_t ret=0,cnt;
+	bool upper_end = false,lower_end = false;
+	int status;
+
+	start_block = ovl_get_block(iocb->ki_pos);
+	end_block = ovl_get_block(iocb->ki_pos+iter->count);
+	oi = OVL_I(dentry->d_inode);
+	count = iter->count;
+	//printk("debug\n");
+	printk("fzz_overlay async_block_read_iter pos=%lld pos+count=%lld\n",iocb->ki_pos,iocb->ki_pos+iter->count);
+	//printk("fzz_overlay block_read_iter start_block=%ld end_block=%ld count=%ld\n",start_block,end_block,count);
+	ovl_path_upper(dentry,&upper_path);
+	if(unlikely(IS_ERR(&upper_path)))
+	{
+		return PTR_ERR(&upper_path);
+	}
+
+	ovl_path_lowerdata(dentry,&lower_path);
+	if(unlikely(IS_ERR(&lower_path)))
+	{
+		return PTR_ERR(&lower_path);
+	}
+
+	if(!oi->upper_file)
+	{	
+		oi->upper_file = ovl_path_open(&upper_path, O_RDWR|O_LARGEFILE);
+		if (IS_ERR(oi->upper_file))
+		{
+			printk("fzz_overlay: open upper file error\n");
+			return PTR_ERR(oi->upper_file);
+		}
+	}	
+
+	if(!oi->lower_file)
+	{
+		oi->lower_file = ovl_path_open(&lower_path, O_RDONLY|O_LARGEFILE);
+		if (unlikely(IS_ERR(oi->lower_file)))
+		{
+			printk("fzz_overlay: open lower file error\n");
+			return PTR_ERR(oi->lower_file);
+		}
+	}
+
+	while(count>0)
+	{
+		start_block = ovl_get_block(iocb->ki_pos);
+		end_block = ovl_get_block(iocb->ki_pos+count);
+		if(start_block>oi->block_count)
+		{	
+			if(upper_end)
+				return ret;
+			cnt = vfs_iter_read(oi->upper_file, iter, &iocb->ki_pos,
+						ovl_iocb_to_rwf(iocb));
+			if(cnt<0) return 0;
+			//printk("fzz_overlay: read upper file %s %ld\n",upper_path.dentry->d_name.name,cnt);
+			return ret+cnt;
+		}	
+
+		if(start_block==end_block)
+		{
+			c_count = count;
+		}
+		else 
+		{
+			c_count = start_block*BLOCK_SIZE - iocb->ki_pos;
+		}
+
+		iter->count = c_count;
+
+		status = READ_ONCE(oi->block_status[start_block]);
+		if(status == COPIED)
+		{
+			if(upper_end)
+				break;
+
+			while(c_count>0)
+			{
+				if(upper_end)
+					break;
+				cnt = vfs_iter_read(oi->upper_file, iter, &iocb->ki_pos,
+					    ovl_iocb_to_rwf(iocb));
+				if(cnt<0) 
+				{
+					break;	
+				} else if(cnt==0)
+				{
+					upper_end = true;
+					if(lower_end) break;
+				}
+				c_count -= cnt;
+				ret+=cnt;
+				count-=cnt;
+				//printk("fzz_overlay: read upper file %s %ld\n",upper_path.dentry->d_name.name,cnt);
+			}
+		} 
+		else if(status == UNCOPY)
+		{
+			if(lower_end) 
+				break;
+
+
+			while(c_count>0)
+			{
+				if(lower_end) 
+					break;
+				cnt = vfs_iter_read(oi->lower_file, iter, &iocb->ki_pos,
+							ovl_iocb_to_rwf(iocb));
+				if(cnt<0)
+				{
+					break;
+				} else if(cnt==0)
+				{
+					lower_end = true;
+				}
+				c_count -= cnt;
+				ret+=cnt;
+				count-=cnt;
+				//printk("fzz_overlay: read lower file %s %ld\n",lower_path.dentry->d_name.name,cnt);
+			}
+		} else {
+
+			size_t hash_id = hash_min(start_block,HASH_BITS(copying_block_table));
+			spin_lock(&entry_locks[hash_id]);
+			if(oi->block_status[start_block] == COPYING)
+			{
+				speed_block_copy(dentry, start_block);
+			}
+			spin_unlock(&entry_locks[hash_id]);
+			cnt = vfs_iter_read(oi->upper_file, iter, &iocb->ki_pos,
+							ovl_iocb_to_rwf(iocb));
+			if(cnt<0)
+			{
+				break;
+			} else if(cnt==0)
+			{
+				upper_end = true;
+				if(lower_end) break;
+			}
+			ret+=cnt;
+			count-=cnt;
+		}
+	}
+	return ret;
+}
+
 static ssize_t block_read_iter(struct dentry *dentry,struct kiocb *iocb,struct iov_iter *iter)
 {
 	struct ovl_inode *oi;
@@ -389,7 +569,8 @@ static ssize_t ovl_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 	dentry = file_dentry(file);
 	if(OVL_I(dentry->d_inode)->cow_status)
 	{
-		ret = block_read_iter(dentry,iocb,iter);
+		//ret = block_read_iter(dentry,iocb,iter);
+		ret = async_block_read_iter(dentry, iocb, iter);
 	}
 	else
 	{
@@ -407,6 +588,300 @@ static ssize_t ovl_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 }
 
 //fzz_overlay: start
+static ssize_t async_block_write_iter(struct dentry *dentry,struct file* realfile,struct kiocb *iocb,struct iov_iter *iter)
+{
+	size_t start_block,end_block,i,hash_id;
+	struct block_copy_req *new_req;
+	struct ovl_inode *oi = OVL_I(dentry->d_inode);
+	struct path upper_path,lower_path;
+	int start_part = 0,end_part = 0;
+	ssize_t ret=0,cnt;
+	int status;
+	
+	start_block = ovl_get_block(iocb->ki_pos);
+	end_block = ovl_get_block(iocb->ki_pos + iter->count);
+	ovl_path_upper(dentry,&upper_path);
+	ovl_path_lower(dentry,&lower_path);
+
+	printk("fzz_overlay async_block_write_iter: start_block %ld end_block %ld\n",start_block,end_block);
+	printk("fzz_overlay async_block_write: start pos %lld  end pos %lld\n",iocb->ki_pos,iocb->ki_pos + iter->count);
+
+	if(!oi->upper_file)
+	{	
+		oi->upper_file = ovl_path_open(&upper_path, O_RDWR|O_LARGEFILE);
+		if (unlikely(IS_ERR(oi->upper_file)))
+		{
+			printk("fzz_overlay block_write_iter: open upper file error\n");
+			return PTR_ERR(oi->upper_file);
+		}
+	}
+	if(!oi->lower_file)
+	{
+		oi->lower_file = ovl_path_open(&lower_path, O_RDONLY|O_LARGEFILE);
+		if (unlikely(IS_ERR(oi->lower_file)))
+		{
+			printk("fzz_overlay block_write_iter: open lower file error\n");
+			return PTR_ERR(oi->lower_file);
+		}
+	}
+
+	if(realfile->f_flags&O_APPEND)
+	{
+		if(READ_ONCE(oi->block_status[oi->block_count]) == UNCOPY)
+		{
+			ret = ovl_copy_up_block(oi->lower_file,oi->upper_file,
+				(oi->block_count-1)*BLOCK_SIZE,oi->lower_file->f_inode->i_size - (oi->block_count-1)*BLOCK_SIZE);
+			if(ret<0)
+			{
+				printk("fzz_overlay async_block_write_iter: copy up block error upper:%s\n",oi->upper_file->f_path.dentry->d_name.name);
+				return ret;
+			}
+			WRITE_ONCE(oi->block_status[oi->block_count] ,COPIED);
+		}
+		//printk("append copy end block %d %lld\n",oi->block_count,oi->lower_file->f_inode->i_size - (oi->block_count-1)*BLOCK_SIZE);
+		end_block = oi->block_count;
+		start_block = end_block;
+		start_part = end_part = 1;
+		goto copy_done;
+	}
+
+
+	// the same block both need copy,then direct copy one block
+	if(start_block == end_block)
+	{
+		if(iocb->ki_pos>(start_block-1)*BLOCK_SIZE&&end_block*BLOCK_SIZE>(iocb->ki_pos + iter->count)) 
+		{	
+			hash_id = hash_min(start_block, HASH_BITS(copying_block_table));
+			spin_lock(&entry_locks[hash_id]);
+			status = READ_ONCE(oi->block_status[start_block]);
+			if(status == UNCOPY)
+			{
+				long long lower_size = oi->lower_file->f_inode->i_size;
+				//todo: ccommit copy req
+				ret = ovl_copy_up_block(oi->lower_file,oi->upper_file,
+					(start_block-1)*BLOCK_SIZE,lower_size);
+				if(ret<0)
+				{
+					printk("fzz_overlay block_write_iter: copy block failed\n");
+					spin_unlock(&entry_locks[hash_id]);
+					return ret;
+				}
+				WRITE_ONCE(oi->block_status[start_block] ,COPIED);
+
+			} else if(status == COPYING){
+				//to copied
+				ret = speed_block_copy(dentry, start_block);
+				if(ret<0)
+				{
+					printk("fzz_overlay block_write_iter: speed copy block failed\n");
+					spin_unlock(&entry_locks[hash_id]);
+					return ret;
+				}
+			}
+			
+			spin_unlock(&entry_locks[hash_id]);
+			start_part = end_part = 1;
+			goto copy_done;
+		}
+	}
+
+	hash_id = hash_min(start_block, HASH_BITS(copying_block_table));
+	spin_lock(&entry_locks[hash_id]);
+	if(iocb->ki_pos>(start_block-1)*BLOCK_SIZE)
+	{
+		start_part = 1;
+		status = READ_ONCE(oi->block_status[start_block]);
+		if(status == UNCOPY)
+		{
+					
+			new_req = kzalloc(sizeof(struct block_copy_req), GFP_KERNEL);
+			if(!new_req)
+			{
+				spin_unlock(&entry_locks[hash_id]);
+				printk("fzz_overlay async_block_write_iter: alloc new_req error\n");
+				return -ENOMEM;
+			}
+			new_req->dentry = dentry;
+			new_req->block_id = start_block;
+			new_req->offset = (start_block-1)*BLOCK_SIZE;
+			new_req->len = iocb->ki_pos - (start_block-1)*BLOCK_SIZE;
+
+			hash_add(copying_block_table, &new_req->copy_req_list, new_req->block_id);
+			WRITE_ONCE(oi->block_status[start_block],COPYING);
+			// ret = ovl_copy_up_block(oi->lower_file,oi->upper_file,
+			// 	(start_block-1)*BLOCK_SIZE,lower_size - (start_block-1)*BLOCK_SIZE < BLOCK_SIZE?lower_size - (start_block-1)*BLOCK_SIZE:BLOCK_SIZE);
+			// if(ret<0)
+			// {
+			// 	printk("fzz_overlay block_write_iter: copy up block error upper:%s\n",oi->upper_file->f_path.dentry->d_name.name);
+			// 	return ret;
+			// }
+		} else if(status == COPYING)
+		{
+			printk("start is copying id %ld\n",start_block);
+
+			long long lower_size = oi->lower_file->f_inode->i_size;
+			loff_t pos = iocb->ki_pos;
+			size_t len = min((unsigned long long)lower_size - pos,start_block*BLOCK_SIZE - pos);
+
+			struct block_copy_req *req;
+			struct hlist_node *tmp;
+
+			hash_for_each_possible_safe(copying_block_table,req,tmp,copy_req_list,start_block)
+			{
+				if(req->dentry == dentry && req->block_id == start_block)
+				{
+
+					if((pos>=req->offset&&pos<req->offset+req->len) ||
+						(pos+len>req->offset&&pos+len<=req->offset+req->len))
+					{
+						loff_t in_pos = req->offset>pos?req->offset:pos;
+						loff_t in_rpos = req->offset+req->len<pos+len?req->offset+req->len:pos+len;
+
+						loff_t r_pos = req->offset;
+						loff_t r_rpos = req->offset+req->len;
+
+						loff_t out_pos,out_rpos;
+
+						if(in_pos == r_pos)
+						{
+							out_pos = min(in_rpos, r_rpos);
+							out_rpos = max(in_rpos, r_rpos);
+						} else if(r_rpos == in_rpos){
+							out_pos = min(in_pos, r_pos);
+							out_rpos = max(in_pos, r_pos);
+						} else {
+							printk("fzz_overlay block_write_iter: error in COPYING not align block\n");
+						}
+
+						if(out_rpos<out_pos)
+							printk("fzz_overlay block_write_iter: error in COPYING out_r<out_l\n");
+						req->offset = out_pos;
+						req->len = out_rpos - out_pos;
+						printk("new outpos %lld outlen %lld\n",req->offset,req->len);
+						if(req->len == 0) 
+							oi->block_status[start_block] = COPIED;
+						break;
+					} else {
+						break;
+					}
+	
+				}
+			}
+		} else {
+			printk("start copied %ld\n",start_block);
+		}
+
+	}
+	spin_unlock(&entry_locks[hash_id]);
+
+	hash_id = hash_min(end_block,HASH_BITS(copying_block_table));
+	spin_lock(&entry_locks[hash_id]);
+	if(end_block*BLOCK_SIZE>(iocb->ki_pos + iter->count))
+	{
+		end_part = 1;
+		status = READ_ONCE(oi->block_status[end_block]);
+		if(status == UNCOPY)
+		{
+			new_req = kzalloc(sizeof(struct block_copy_req), GFP_KERNEL);
+			if(!new_req)
+			{
+				printk("fzz_overlay async_block_write_iter: alloc new_req error\n");
+				spin_unlock(&entry_locks[hash_id]);
+				return -ENOMEM;
+			}
+			new_req->dentry = dentry;
+			new_req->block_id = end_block;
+			new_req->offset = iocb->ki_pos + iter->count;
+			new_req->len = end_block*BLOCK_SIZE - (iocb->ki_pos + iter->count);
+			hash_add(copying_block_table, &new_req->copy_req_list, new_req->block_id);
+			WRITE_ONCE(oi->block_status[end_block] ,COPYING);
+			
+			// ret = ovl_copy_up_block(oi->lower_file,oi->upper_file,
+			// 	(end_block-1)*BLOCK_SIZE,lower_size - (end_block-1)*BLOCK_SIZE < BLOCK_SIZE?lower_size - (end_block-1)*BLOCK_SIZE:BLOCK_SIZE);
+			// if(ret<0)
+			// {
+			// 	printk("fzz_overlay block_write_iter: copy up block error upper:%s\n",oi->upper_file->f_path.dentry->d_name.name);
+			// 	return ret;
+			// }
+		} else if(status == COPYING)
+		{
+			long long lower_size = oi->lower_file->f_inode->i_size;
+			loff_t pos = (end_block-1)*BLOCK_SIZE;
+			size_t len = min(lower_size*1ull  - pos ,iocb->ki_pos + iter->count - pos);
+
+			struct block_copy_req *req;
+			struct hlist_node *tmp;
+
+			hash_for_each_possible_safe(copying_block_table,req,tmp,copy_req_list,end_block)
+			{
+				if(req->dentry == dentry && req->block_id == end_block)
+				{
+
+					if((pos>=req->offset&&pos<req->offset+req->len) ||
+						(pos+len>req->offset&&pos+len<=req->offset+req->len))
+					{
+						loff_t in_pos = max(req->offset,pos);
+						loff_t in_rpos = min(req->offset+req->len,pos+len);
+
+						loff_t r_pos = req->offset;
+						loff_t r_rpos = req->offset+req->len;
+
+						loff_t out_pos,out_rpos;
+
+						if(in_pos == r_pos)
+						{
+							out_pos = min(in_rpos, r_rpos);
+							out_rpos = max(in_rpos, r_rpos);
+						} else if(r_rpos == in_rpos){
+							out_pos = min(in_pos, r_pos);
+							out_rpos = max(in_pos, r_pos);
+						} else {
+							printk("fzz_overlay block_write_iter: error in COPYING not align block\n");
+						}
+
+						if(out_rpos<out_pos)
+							printk("fzz_overlay block_write_iter: error in COPYING out_r<out_l\n");
+						req->offset = out_pos;
+						req->len = out_rpos - out_pos;
+						if(req->len == 0) oi->block_status[end_block] = COPIED;
+						break;
+					} else {
+						break;
+					}
+	
+				}
+			}
+		} else {
+			printk("end copied %ld\n",end_block);
+		}
+
+	}
+	spin_unlock(&entry_locks[hash_id]);
+
+copy_done: 
+
+	while (ret<iter->count) {
+		cnt = vfs_iter_write(realfile, iter, &iocb->ki_pos,
+			ovl_iocb_to_rwf(iocb));
+		if(cnt<0)
+			return -1;
+		//printk("fzz_overlay block_write_iter: %ld",cnt);
+		ret+=cnt;
+	}
+
+
+	for(i=start_block+start_part;i<=end_block-end_part;i++)
+	{
+		if(i>oi->block_count)
+			break;
+		WRITE_ONCE(oi->block_status[i],COPIED);
+		oi->copy_count++;
+	}
+
+	return ret;
+}
+
+
 static ssize_t block_write_iter(struct dentry *dentry,struct file* realfile,struct kiocb *iocb,struct iov_iter *iter)
 {
 	size_t start_block,end_block,i;
@@ -544,7 +1019,6 @@ copy_done: ret = 0;
 		ret+=cnt;
 	}
 
-	//TODO: how to handle ret<len?
 	for(i=start_block;i<=end_block;i++)
 	{
 		if(i>oi->block_count)
@@ -608,7 +1082,8 @@ static ssize_t ovl_write_iter(struct kiocb *iocb, struct iov_iter *iter)
 	if(OVL_I(inode)->cow_status)
 	{
 		//printk("write_block start\n");
-		ret = block_write_iter(file_dentry(file),real.file,iocb,iter);
+		//ret = block_write_iter(file_dentry(file),real.file,iocb,iter);
+		ret = async_block_write_iter(file_dentry(file), real.file, iocb, iter);
 	}
 	else
 	{

@@ -28,6 +28,8 @@ enum ovl_path_type {
 #define OVL_XATTR_UPPER OVL_XATTR_PREFIX "upper"
 #define OVL_XATTR_METACOPY OVL_XATTR_PREFIX "metacopy"
 
+#define OVL_ID_HASH(id)	(id%(1<<20))
+
 enum ovl_inode_flag {
 	/* Pure upper dir that may contain non pure upper entries */
 	OVL_IMPURE,
