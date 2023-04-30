@@ -342,48 +342,6 @@ static int  ovl_block_copy(void *data)
 	struct hlist_node *tmp;
 	int n;
 
-	// for(;;)
-	// {
-	// 	if (kthread_should_stop())
-	// 		break;
-		
-	// 	for(bkt=0,req=NULL;req==NULL && bkt<HASH_SIZE(copying_block_table);bkt++)
-	// 	{
-	// 		if (kthread_should_stop())
-	// 			break;
-	// 		int lock = spin_trylock(&entry_locks[bkt]);
-	// 		if(lock<0)
-	// 			continue;
-	// 		hash_for_each_possible_safe(copying_block_table,req,tmp,copy_req_list,bkt)
-	// 		{
-	// 			//printk("ovl_block_copy: get req %ld pos %lld len %ld\n",req->block_id,req->offset,req->len);
-	// 			struct ovl_inode *oi = OVL_I(req->dentry->d_inode);
-	// 			if(oi->block_status[req->block_id] != COPYING || req->len == 0)
-	// 			{
-	// 				// del
-	// 				//printk("block status %d\n",oi->block_status[req->block_id]);
-	// 			} else {
-	// 				ovl_copy_up_block(oi->lower_file,oi->upper_file,req->offset,req->len);
-	// 				oi->block_status[req->block_id] = COPIED;
-	// 				//printk("async copy block %d pos %lld len %lld\n",req->block_id,req->offset,req->len);
-	// 			}
-
-	// 			//do del 
-	// 			hash_del(&req->copy_req_list);
-	// 		}
-	// 		spin_unlock(&entry_locks[bkt]);
-
-	// 		if (kthread_should_stop())
-	// 			break;
-	// 		schedule();
-	// 	}
-		
-	// 	if (kthread_should_stop())
-	// 		break;
-
-	// 	//msleep(3);
-	// }
-
 	// kfifo info 
 	for(;;)
 	{
