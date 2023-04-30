@@ -29,10 +29,14 @@ MODULE_LICENSE("GPL");
 
 //fzz_overlay: start
 #define WORK_TASK_NUM 4096
+#define COPY_REQ_NUM 4096 * 800
 struct kfifo meta_save_fifo;
 struct meta_save_task buf[WORK_TASK_NUM*sizeof(struct meta_save_task)];
-struct meta_save_task tasks[4096*4];
+struct meta_save_task tasks[WORK_TASK_NUM*sizeof(struct meta_save_task)];
 struct task_struct *meta_save_thread;
+struct kfifo block_copy_fifo;
+size_t block_buf[COPY_REQ_NUM*sizeof(size_t)];
+size_t block_tasks[COPY_REQ_NUM*sizeof(size_t)];
 struct task_struct *block_copy_thread;
 DEFINE_HASHTABLE(copying_block_table, ENTRY_NUM);
 struct spinlock entry_locks[1<<ENTRY_NUM];
@@ -334,57 +338,100 @@ static int  ovl_meta_save(void *data)
 
 static int  ovl_block_copy(void *data)
 {
-	int bkt;
 	struct block_copy_req *req;
 	struct hlist_node *tmp;
+	int n;
 
+	// for(;;)
+	// {
+	// 	if (kthread_should_stop())
+	// 		break;
+		
+	// 	for(bkt=0,req=NULL;req==NULL && bkt<HASH_SIZE(copying_block_table);bkt++)
+	// 	{
+	// 		if (kthread_should_stop())
+	// 			break;
+	// 		int lock = spin_trylock(&entry_locks[bkt]);
+	// 		if(lock<0)
+	// 			continue;
+	// 		hash_for_each_possible_safe(copying_block_table,req,tmp,copy_req_list,bkt)
+	// 		{
+	// 			//printk("ovl_block_copy: get req %ld pos %lld len %ld\n",req->block_id,req->offset,req->len);
+	// 			struct ovl_inode *oi = OVL_I(req->dentry->d_inode);
+	// 			if(oi->block_status[req->block_id] != COPYING || req->len == 0)
+	// 			{
+	// 				// del
+	// 				//printk("block status %d\n",oi->block_status[req->block_id]);
+	// 			} else {
+	// 				ovl_copy_up_block(oi->lower_file,oi->upper_file,req->offset,req->len);
+	// 				oi->block_status[req->block_id] = COPIED;
+	// 				//printk("async copy block %d pos %lld len %lld\n",req->block_id,req->offset,req->len);
+	// 			}
+
+	// 			//do del 
+	// 			hash_del(&req->copy_req_list);
+	// 		}
+	// 		spin_unlock(&entry_locks[bkt]);
+
+	// 		if (kthread_should_stop())
+	// 			break;
+	// 		schedule();
+	// 	}
+		
+	// 	if (kthread_should_stop())
+	// 		break;
+
+	// 	//msleep(3);
+	// }
+
+	// kfifo info 
 	for(;;)
 	{
 		if (kthread_should_stop())
 			break;
-		
-		for(bkt=0,req=NULL;req==NULL && bkt<HASH_SIZE(copying_block_table);bkt++)
+		n = kfifo_out(&block_copy_fifo, block_buf, COPY_REQ_NUM*sizeof(size_t));
+		if(n>0)
+			printk("get fifo %d\n",n);
+		int i;
+		for(i=0;i<n;i++)
 		{
-			if (kthread_should_stop())
-				break;
-			int lock = spin_trylock(&entry_locks[bkt]);
-			if(lock<0)
-				continue;
-			hash_for_each_possible_safe(copying_block_table,req,tmp,copy_req_list,bkt)
+			size_t block_id = block_buf[i];
+			size_t hash_id = hash_min(block_id, HASH_BITS(copying_block_table));
+			spin_lock(&entry_locks[hash_id]);
+			hash_for_each_possible_safe(copying_block_table,req,tmp,copy_req_list,block_id)
 			{
 				//printk("ovl_block_copy: get req %ld pos %lld len %ld\n",req->block_id,req->offset,req->len);
 				struct ovl_inode *oi = OVL_I(req->dentry->d_inode);
-				if(READ_ONCE(oi->block_status[req->block_id]) != COPYING || req->len == 0)
+				if(oi->block_status[req->block_id] != COPYING || req->len == 0)
 				{
 					// del
 					//printk("block status %d\n",oi->block_status[req->block_id]);
 				} else {
 					ovl_copy_up_block(oi->lower_file,oi->upper_file,req->offset,req->len);
-					WRITE_ONCE(oi->block_status[req->block_id] ,COPIED);
+					oi->block_status[req->block_id] = COPIED;
 					//printk("async copy block %d pos %lld len %lld\n",req->block_id,req->offset,req->len);
 				}
 
 				//do del 
 				hash_del(&req->copy_req_list);
 			}
-			spin_unlock(&entry_locks[bkt]);
-
+			spin_unlock(&entry_locks[hash_id]);
 			if (kthread_should_stop())
 				break;
-			schedule();
 		}
-		
-		if (kthread_should_stop())
+		if(kthread_should_stop())
 			break;
-
-		//msleep(3);
+		if(n < COPY_REQ_NUM/32)
+			msleep(1);
+		else if(n < COPY_REQ_NUM/16)
+			schedule();
 	}
 }
 //fzz_overlay: end
 static void ovl_put_super(struct super_block *sb)
 {
 	struct ovl_fs *ofs = sb->s_fs_info;
-
+	
 	if(meta_save_thread)
 		kthread_stop(meta_save_thread);
 	if(block_copy_thread)
@@ -1852,7 +1899,8 @@ out:
 static struct dentry *ovl_mount(struct file_system_type *fs_type, int flags,
 				const char *dev_name, void *raw_data)
 {
-	kfifo_init(&meta_save_fifo,tasks,4096*2*sizeof(struct meta_save_task));
+	kfifo_init(&meta_save_fifo,tasks,4096*sizeof(struct meta_save_task));
+	kfifo_init(&block_copy_fifo,block_tasks,COPY_REQ_NUM * sizeof(size_t));
 	//meta_save_thread = kthread_run(ovl_meta_save, NULL, "meta_save");
 	int i=0;
 	for(i = 0;i<(1<<ENTRY_NUM);i++)

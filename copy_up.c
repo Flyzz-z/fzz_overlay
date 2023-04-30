@@ -475,7 +475,7 @@ static int ovl_copy_up_inode(struct ovl_copy_up_ctx *c, struct dentry *temp)
 		}
 		memset(mem, 0, block_count+1);
 		OVL_I(c->dentry->d_inode)->block_status = (char*)mem;
-		ovl_open_meta(c->dentry,block_count,temp->d_inode->i_ino);
+		//ovl_open_meta(c->dentry,block_count,temp->d_inode->i_ino);
 		// printk("fzz_overlay: copy_up_inode: cow_status = %d, block_count = %d", 
 		// 	OVL_I(c->dentry->d_inode)->cow_status, 
 		// 	OVL_I(c->dentry->d_inode)->block_count);
@@ -918,7 +918,7 @@ static bool ovl_open_need_copy_up(struct dentry *dentry, int flags)
 	/* Copy up of disconnected dentry does not set upper alias */
 	if (ovl_already_copied_up(dentry, flags))
 	{
-		ovl_open_meta(dentry, 0,0);
+		//ovl_open_meta(dentry, 0,0);
 		return false;
 	}
 
@@ -992,6 +992,6 @@ int ovl_copy_up_block(struct file *lower_file, struct file *upper_file, loff_t p
 		len -= bytes;
 	}
 out:
-	vfs_fsync_range(upper_file, pos, pos+BLOCK_SIZE, 0);
+	//vfs_fsync_range(upper_file, pos, pos+BLOCK_SIZE, 0);
 	return error;
 }
